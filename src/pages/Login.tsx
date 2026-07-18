@@ -1,4 +1,4 @@
-//@ts-nocheck
+// @ts-nocheck
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import toast from 'react-hot-toast';
@@ -15,8 +15,8 @@ export default function Login() {
     
     setIsLoading(true);
     try {
-      // FIXED: Using standard signIn for Supabase v1 compatibility
-      const { error } = await supabase.auth.signIn({
+      // STRICTLY Supabase v2: using signInWithPassword
+      const { error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
