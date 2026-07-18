@@ -2,8 +2,9 @@ import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import POS from './pages/POS';
+import Dashboard from './pages/Dashboard';
+import Inventory from './pages/Inventory';
 
-// Placeholder for other pages to ensure routing works
 const Placeholder = ({ title }: { title: string }) => (
   <div className="flex items-center justify-center h-full text-2xl font-bold text-gray-300">
     {title} Screen
@@ -16,8 +17,8 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<POS />} />
-          <Route path="dashboard" element={<Placeholder title="Dashboard" />} />
-          <Route path="inventory" element={<Placeholder title="Inventory" />} />
+          <Route path="dashboard" element={<Dashboard />} />
+          <Route path="inventory" element={<Inventory />} />
           <Route path="customers" element={<Placeholder title="Customers" />} />
           <Route path="settings" element={<Placeholder title="Settings" />} />
         </Route>
