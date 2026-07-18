@@ -8,11 +8,10 @@ import { supabase } from '../lib/supabase';
 
 export default function POS() {
   const { cart, addToCart, removeFromCart, updateQuantity, clearCart, cartTotal } = useStore();
-  const { products, loading } = useProducts();
+  // NEW: We are now pulling in 'refreshProducts' to update the UI instantly after a sale
+  const { products, loading, refreshProducts } = useProducts();
   const [searchTerm, setSearchTerm] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  
-  // NEW: State for the receipt modal
   const [receiptData, setReceiptData] = useState<any>(null);
 
   const filteredProducts = products.filter(p => 
@@ -52,12 +51,22 @@ export default function POS() {
       const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
       if (itemsError) throw itemsError;
 
-      // 4. Update Stock
+      // 4. FIXED: Update Stock directly from the frontend
       for (const item of cart) {
-        await supabase.rpc('decrement_stock', { p_id: item.id, p_amount: item.cart_quantity });
+        // Calculate what the stock should be (preventing it from going below 0)
+        const newStock = Math.max(0, item.stock - item.cart_quantity);
+        
+        const { error: stockError } = await supabase
+          .from('products')
+          .update({ stock: newStock })
+          .eq('id', item.id);
+          
+        if (stockError) {
+          console.error(`Failed to update stock for ${item.name}`);
+        }
       }
 
-      // 5. Generate Receipt Data BEFORE clearing the cart
+      // 5. Generate Receipt Data
       setReceiptData({
         id: saleData.id,
         date: new Date().toLocaleString(),
@@ -68,6 +77,10 @@ export default function POS() {
 
       toast.success(`Payment of Rs. ${cartTotal.toFixed(2)} received!`);
       clearCart();
+      
+      // NEW: Refresh the product list so the new stock amounts show up immediately
+      refreshProducts();
+      
     } catch (error: any) {
       toast.error(error.message || "Checkout failed");
       console.error(error);
@@ -83,7 +96,7 @@ export default function POS() {
   return (
     <div className="flex flex-col lg:flex-row h-screen bg-gray-50 overflow-hidden">
       
-      {/* LEFT: PRODUCTS (Hidden when printing) */}
+      {/* LEFT: PRODUCTS */}
       <div className="w-full lg:w-2/3 flex flex-col h-[50vh] lg:h-full print:hidden">
         <div className="bg-white p-4 shadow-sm z-10 flex items-center gap-4">
           <div className="relative flex-1">
@@ -121,7 +134,9 @@ export default function POS() {
                 >
                   <span className="font-semibold text-gray-800 line-clamp-2">{product.name}</span>
                   <span className="text-brand-600 font-bold mt-2">Rs. {product.selling_price?.toFixed(2)}</span>
-                  <span className="text-xs text-gray-400 mt-1">Stock: {product.stock}</span>
+                  <span className={`text-xs mt-1 ${product.stock <= 20 ? 'text-red-500 font-bold' : 'text-gray-400'}`}>
+                    Stock: {product.stock}
+                  </span>
                 </button>
               ))}
             </div>
@@ -129,7 +144,7 @@ export default function POS() {
         </div>
       </div>
 
-      {/* RIGHT: CART (Hidden when printing) */}
+      {/* RIGHT: CART */}
       <div className="w-full lg:w-1/3 bg-white border-t lg:border-l border-gray-200 flex flex-col h-[50vh] lg:h-full shadow-2xl z-20 print:hidden">
         <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white">
           <h2 className="text-xl font-bold flex items-center gap-2">
@@ -196,7 +211,7 @@ export default function POS() {
         </div>
       </div>
 
-      {/* --- NEW: DIGITAL RECEIPT MODAL --- */}
+      {/* --- DIGITAL RECEIPT MODAL --- */}
       {receiptData && (
         <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm print:p-0 print:bg-white print:block">
           <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl print:shadow-none print:w-full print:max-w-none animate-in fade-in zoom-in-95 duration-200">
