@@ -1,129 +1,186 @@
 // @ts-nocheck
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
-import { TrendingUp, DollarSign, Package, AlertTriangle, Users, ArrowUpRight, ArrowDownRight } from 'lucide-react';
-
-// Production dummy analytics data (LKR Currency Context)
-const SALES_DATA = [
-  { name: 'Mon', sales: 45000, profit: 12000, expenses: 5000 },
-  { name: 'Tue', sales: 52000, profit: 15000, expenses: 4500 },
-  { name: 'Wed', sales: 49000, profit: 13500, expenses: 6000 },
-  { name: 'Thu', sales: 63000, profit: 19000, expenses: 4000 },
-  { name: 'Fri', sales: 58000, profit: 16500, expenses: 5500 },
-  { name: 'Sat', sales: 85000, profit: 26000, expenses: 8000 },
-  { name: 'Sun', sales: 92000, profit: 29000, expenses: 7500 },
-];
-
-const TOP_PRODUCTS = [
-  { name: 'Samba Rice 1kg', sales: 420, stock: 50, status: 'In Stock' },
-  { name: 'Red Onion 500g', sales: 310, stock: 20, status: 'Low Stock' },
-  { name: 'Coconut (Large)', sales: 280, stock: 200, status: 'In Stock' },
-  { name: 'Highland Milk Powder', sales: 150, stock: 5, status: 'Low Stock' },
-];
+import { TrendingUp, DollarSign, Package, AlertTriangle, Loader2 } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 export default function Dashboard() {
-  const metrics = [
-    { title: "Today's Sales", value: "Rs. 92,000", change: "+14.2%", positive: true, icon: <DollarSign className="text-emerald-600" /> },
-    { title: "Today's Profit", value: "Rs. 29,000", change: "+18.5%", positive: true, icon: <TrendingUp className="text-blue-600" /> },
-    { title: "Stock Value", value: "Rs. 1,450,000", change: "420 Items", positive: true, icon: <Package className="text-indigo-600" /> },
-    { title: "Customer Loans", value: "Rs. 68,400", change: "12 Accounts", positive: false, icon: <Users className="text-amber-600" /> },
-  ];
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
+    totalRevenue: 0,
+    totalSales: 0,
+    activeProducts: 0,
+    lowStock: 0,
+  });
+  const [chartData, setChartData] = useState([]);
 
-  const alerts = [
-    { title: "Low Stock Alert", count: 8, color: "bg-amber-50 text-amber-700 border-amber-200" },
-    { title: "Out of Stock", count: 3, color: "bg-red-50 text-red-700 border-red-200" },
-  ];
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+
+      // 1. Fetch all completed sales
+      const { data: sales, error: salesError } = await supabase
+        .from('sales')
+        .select('created_at, total')
+        .eq('status', 'completed');
+      
+      if (salesError) throw salesError;
+
+      // 2. Fetch all products (to count total and low stock)
+      const { data: products, error: productsError } = await supabase
+        .from('products')
+        .select('stock');
+
+      if (productsError) throw productsError;
+
+      // Calculate Stats
+      const totalRev = sales?.reduce((sum, sale) => sum + (sale.total || 0), 0) || 0;
+      const lowStockCount = products?.filter(p => p.stock <= 20).length || 0;
+
+      setStats({
+        totalRevenue: totalRev,
+        totalSales: sales?.length || 0,
+        activeProducts: products?.length || 0,
+        lowStock: lowStockCount
+      });
+
+      // Calculate Chart Data (Last 7 Days)
+      const last7Days = Array.from({ length: 7 }).map((_, i) => {
+        const d = new Date();
+        d.setDate(d.getDate() - (6 - i));
+        return d.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+      });
+
+      const chartMap = {};
+      last7Days.forEach(date => {
+        // Get short day name (e.g., "Mon", "Tue")
+        const dayName = new Date(date).toLocaleDateString('en-US', { weekday: 'short' });
+        chartMap[date] = { name: dayName, revenue: 0, orders: 0 };
+      });
+
+      // Group sales into the chart data
+      sales?.forEach(sale => {
+        const saleDate = sale.created_at.split('T')[0];
+        if (chartMap[saleDate]) {
+          chartMap[saleDate].revenue += sale.total;
+          chartMap[saleDate].orders += 1;
+        }
+      });
+
+      setChartData(Object.values(chartMap));
+
+    } catch (error) {
+      console.error("Error fetching dashboard data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center bg-gray-50 text-gray-400 space-y-4">
+        <Loader2 className="animate-spin text-brand-500" size={48} />
+        <p className="font-medium text-lg">Crunching your live numbers...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto bg-gray-50 p-4 lg:p-8 space-y-6 pb-24 lg:pb-8">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Business Overview</h1>
-          <p className="text-gray-500">Real-time performance metrics for Ahamed's Kade.</p>
-        </div>
-        <div className="flex gap-2">
-          <span className="bg-white border border-gray-200 px-4 py-2 rounded-xl text-sm font-semibold shadow-sm text-gray-700">Currency: LKR</span>
-          <span className="bg-brand-500 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm">Live Syncing</span>
-        </div>
+      <div>
+        <h1 className="text-3xl font-black text-gray-900 tracking-tight">Overview</h1>
+        <p className="text-gray-500">Your live business performance at a glance.</p>
       </div>
 
-      {/* Stock Alerts Bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {alerts.map((alert, idx) => (
-          <div key={idx} className={`p-4 rounded-2xl border flex items-center justify-between shadow-sm ${alert.color}`}>
-            <div className="flex items-center gap-3">
-              <AlertTriangle size={20} />
-              <span className="font-bold">{alert.title}</span>
-            </div>
-            <span className="text-xl font-black">{alert.count}</span>
+      {/* STATS GRID */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-4 hover:shadow-md transition-shadow">
+          <div className="p-4 bg-brand-50 text-brand-600 rounded-xl">
+            <DollarSign size={24} />
           </div>
-        ))}
-      </div>
-
-      {/* Main Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {metrics.map((m, idx) => (
-          <div key={idx} className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:shadow-md transition-shadow">
-            <div className="flex justify-between items-start mb-4">
-              <div className="p-3 bg-gray-50 rounded-xl group-hover:bg-gray-100 transition-colors">{m.icon}</div>
-              <span className={`flex items-center text-xs font-bold px-2 py-1 rounded-lg ${m.positive ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                {m.positive ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                {m.change}
-              </span>
-            </div>
-            <div>
-              <p className="text-gray-500 text-sm font-medium">{m.title}</p>
-              <h3 className="text-2xl font-black text-gray-900 mt-1">{m.value}</h3>
-            </div>
+          <div>
+            <p className="text-sm font-medium text-gray-500">Total Revenue</p>
+            <h3 className="text-2xl font-black text-gray-900">Rs. {stats.totalRevenue.toLocaleString()}</h3>
           </div>
-        ))}
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-4 hover:shadow-md transition-shadow">
+          <div className="p-4 bg-blue-50 text-blue-600 rounded-xl">
+            <TrendingUp size={24} />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-gray-500">Total Sales</p>
+            <h3 className="text-2xl font-black text-gray-900">{stats.totalSales}</h3>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-4 hover:shadow-md transition-shadow">
+          <div className="p-4 bg-emerald-50 text-emerald-600 rounded-xl">
+            <Package size={24} />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-gray-500">Active Products</p>
+            <h3 className="text-2xl font-black text-gray-900">{stats.activeProducts}</h3>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-4 hover:shadow-md transition-shadow">
+          <div className="p-4 bg-amber-50 text-amber-600 rounded-xl">
+            <AlertTriangle size={24} />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-gray-500">Low Stock Alerts</p>
+            <h3 className="text-2xl font-black text-gray-900">{stats.lowStock}</h3>
+          </div>
+        </div>
       </div>
 
-      {/* Charts Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Sales & Profit Revenue Chart */}
-        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm lg:col-span-2">
-          <h3 className="text-lg font-bold text-gray-800 mb-4">Weekly Sales & Profit Trend</h3>
-          <div className="h-72">
+      {/* CHARTS */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+          <h2 className="text-lg font-bold text-gray-900 mb-6">Revenue Trend (Last 7 Days)</h2>
+          <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={SALES_DATA} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <defs>
-                  <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.2}/>
-                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
+                  <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} />
-                <Tooltip contentStyle={{ background: '#fff', border: 'none', borderRadius: '12px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }} />
-                <Area type="monotone" dataKey="sales" name="Sales (LKR)" stroke="#22c55e" strokeWidth={3} fillOpacity={1} fill="url(#colorSales)" />
-                <Area type="monotone" dataKey="profit" name="Profit (LKR)" stroke="#3b82f6" strokeWidth={3} fill="none" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#9ca3af', fontSize: 12}} dy={10} />
+                <YAxis axisLine={false} tickLine={false} tick={{fill: '#9ca3af', fontSize: 12}} />
+                <Tooltip 
+                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  formatter={(value) => [`Rs. ${value}`, 'Revenue']}
+                />
+                <Area type="monotone" dataKey="revenue" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorRevenue)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Top Selling Performance Board */}
-        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm flex flex-col justify-between">
-          <div>
-            <h3 className="text-lg font-bold text-gray-800 mb-4">Top Selling Items</h3>
-            <div className="space-y-4">
-              {TOP_PRODUCTS.map((prod, idx) => (
-                <div key={idx} className="flex items-center justify-between border-b border-gray-50 pb-3 last:border-0 last:pb-0">
-                  <div>
-                    <h4 className="font-bold text-gray-800 text-sm">{prod.name}</h4>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-md font-semibold ${prod.status === 'In Stock' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                      {prod.stock} left
-                    </span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-sm font-black text-gray-900">{prod.sales} sold</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+          <h2 className="text-lg font-bold text-gray-900 mb-6">Orders per Day</h2>
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#9ca3af', fontSize: 12}} dy={10} />
+                <YAxis axisLine={false} tickLine={false} tick={{fill: '#9ca3af', fontSize: 12}} />
+                <Tooltip 
+                  cursor={{fill: '#f3f4f6'}}
+                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  formatter={(value) => [value, 'Orders']}
+                />
+                <Bar dataKey="orders" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={40} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
       </div>
