@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../store/useStore';
 import { useProducts } from '../hooks/useProducts';
-import { Search, ShoppingCart, Trash2, CreditCard, Banknote, Plus, Minus, ScanBarcode, Loader2 } from 'lucide-react';
+import { Search, ShoppingCart, Trash2, CreditCard, Banknote, Plus, Minus, ScanBarcode, Loader2, Printer, CheckCircle, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { supabase } from '../lib/supabase';
 
@@ -11,8 +11,10 @@ export default function POS() {
   const { products, loading } = useProducts();
   const [searchTerm, setSearchTerm] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  
+  // NEW: State for the receipt modal
+  const [receiptData, setReceiptData] = useState<any>(null);
 
-  // Filter real products from Supabase
   const filteredProducts = products.filter(p => 
     p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (p.barcode && p.barcode.includes(searchTerm))
@@ -50,24 +52,39 @@ export default function POS() {
       const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
       if (itemsError) throw itemsError;
 
-      // 4. Update Stock (Simple version)
+      // 4. Update Stock
       for (const item of cart) {
         await supabase.rpc('decrement_stock', { p_id: item.id, p_amount: item.cart_quantity });
       }
 
-      toast.success(`Payment of Rs. ${cartTotal.toFixed(2)} received via ${method}`);
+      // 5. Generate Receipt Data BEFORE clearing the cart
+      setReceiptData({
+        id: saleData.id,
+        date: new Date().toLocaleString(),
+        method: method,
+        items: [...cart],
+        total: cartTotal
+      });
+
+      toast.success(`Payment of Rs. ${cartTotal.toFixed(2)} received!`);
       clearCart();
     } catch (error: any) {
       toast.error(error.message || "Checkout failed");
+      console.error(error);
     } finally {
       setIsProcessing(false);
     }
   };
 
+  const handlePrint = () => {
+    window.print();
+  };
+
   return (
     <div className="flex flex-col lg:flex-row h-screen bg-gray-50 overflow-hidden">
-      {/* LEFT: PRODUCTS */}
-      <div className="w-full lg:w-2/3 flex flex-col h-[50vh] lg:h-full">
+      
+      {/* LEFT: PRODUCTS (Hidden when printing) */}
+      <div className="w-full lg:w-2/3 flex flex-col h-[50vh] lg:h-full print:hidden">
         <div className="bg-white p-4 shadow-sm z-10 flex items-center gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
@@ -92,7 +109,7 @@ export default function POS() {
             </div>
           ) : filteredProducts.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-400">
-              <p>No products found in database.</p>
+              <p>No products found.</p>
             </div>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -103,7 +120,7 @@ export default function POS() {
                   className="bg-white p-4 rounded-2xl shadow-sm hover:shadow-md transition-all active:scale-95 flex flex-col items-center justify-center text-center border border-gray-100 h-32"
                 >
                   <span className="font-semibold text-gray-800 line-clamp-2">{product.name}</span>
-                  <span className="text-brand-600 font-bold mt-2">Rs. {product.selling_price.toFixed(2)}</span>
+                  <span className="text-brand-600 font-bold mt-2">Rs. {product.selling_price?.toFixed(2)}</span>
                   <span className="text-xs text-gray-400 mt-1">Stock: {product.stock}</span>
                 </button>
               ))}
@@ -112,8 +129,8 @@ export default function POS() {
         </div>
       </div>
 
-      {/* RIGHT: CART (Unchanged) */}
-      <div className="w-full lg:w-1/3 bg-white border-t lg:border-l border-gray-200 flex flex-col h-[50vh] lg:h-full shadow-2xl z-20">
+      {/* RIGHT: CART (Hidden when printing) */}
+      <div className="w-full lg:w-1/3 bg-white border-t lg:border-l border-gray-200 flex flex-col h-[50vh] lg:h-full shadow-2xl z-20 print:hidden">
         <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white">
           <h2 className="text-xl font-bold flex items-center gap-2">
             <ShoppingCart size={24} /> Current Bill
@@ -178,6 +195,85 @@ export default function POS() {
           </div>
         </div>
       </div>
+
+      {/* --- NEW: DIGITAL RECEIPT MODAL --- */}
+      {receiptData && (
+        <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm print:p-0 print:bg-white print:block">
+          <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl print:shadow-none print:w-full print:max-w-none animate-in fade-in zoom-in-95 duration-200">
+            
+            {/* Action Bar (Hidden on print) */}
+            <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 print:hidden">
+              <div className="flex items-center gap-2 text-emerald-600 font-bold">
+                <CheckCircle size={20} /> Payment Successful
+              </div>
+              <button onClick={() => setReceiptData(null)} className="p-2 hover:bg-gray-200 rounded-full text-gray-500">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Printable Receipt Area */}
+            <div className="p-6 font-mono text-sm text-gray-800 print:p-0 print:text-black">
+              <div className="text-center mb-6">
+                <h2 className="text-2xl font-black uppercase mb-1">My Store</h2>
+                <p className="text-gray-500 text-xs uppercase">Digital POS System</p>
+                <div className="mt-4 border-t border-dashed border-gray-300 pt-4">
+                  <p>Receipt #{receiptData.id.slice(0, 8).toUpperCase()}</p>
+                  <p className="text-xs text-gray-500 mt-1">{receiptData.date}</p>
+                </div>
+              </div>
+
+              <div className="space-y-3 mb-6 border-b border-dashed border-gray-300 pb-6">
+                {receiptData.items.map((item: any, index: number) => (
+                  <div key={index} className="flex justify-between items-start">
+                    <div className="flex-1 pr-4">
+                      <p className="font-bold">{item.name}</p>
+                      <p className="text-xs text-gray-500">{item.cart_quantity} x Rs. {item.price.toFixed(2)}</p>
+                    </div>
+                    <span className="font-bold">Rs. {item.subtotal.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2 mb-8">
+                <div className="flex justify-between items-center text-gray-500">
+                  <span>Subtotal</span>
+                  <span>Rs. {receiptData.total.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between items-center text-lg font-black">
+                  <span>TOTAL</span>
+                  <span>Rs. {receiptData.total.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between items-center text-gray-500 text-xs mt-2 pt-2 border-t border-gray-100">
+                  <span>Payment Method</span>
+                  <span className="uppercase font-bold">{receiptData.method}</span>
+                </div>
+              </div>
+
+              <div className="text-center text-gray-500 text-xs">
+                <p>Thank you for your purchase!</p>
+                <p>Please come again.</p>
+              </div>
+            </div>
+
+            {/* Print Button (Hidden on print) */}
+            <div className="p-4 bg-gray-50 border-t border-gray-100 print:hidden flex gap-3">
+              <button 
+                onClick={handlePrint}
+                className="flex-1 bg-brand-500 hover:bg-brand-600 text-white font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors"
+              >
+                <Printer size={20} /> Print Receipt
+              </button>
+              <button 
+                onClick={() => setReceiptData(null)}
+                className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 px-4 rounded-xl transition-colors"
+              >
+                New Sale
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
     </div>
   );
 }
