@@ -1,4 +1,4 @@
-//@ts-nocheck
+// @ts-nocheck
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
@@ -18,10 +18,25 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 1. Check active session on load
-    const currentSession = supabase.auth.session();
-    setSession(currentSession);
-    setLoading(false);
+    // 1. Safely check active session on load without crashing
+    const checkSession = async () => {
+      try {
+        if (supabase.auth.getSession) {
+          // Supabase v2
+          const { data } = await supabase.auth.getSession();
+          setSession(data?.session || null);
+        } else {
+          // Supabase v1 fallback
+          setSession(supabase.auth.session());
+        }
+      } catch (error) {
+        console.error("Session check failed:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    checkSession();
 
     // 2. Listen for login/logout events
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -29,7 +44,9 @@ export default function App() {
     });
 
     return () => {
-      authListener?.unsubscribe();
+      if (authListener && authListener.subscription) {
+        authListener.subscription.unsubscribe();
+      }
     };
   }, []);
 
@@ -57,7 +74,6 @@ export default function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/pos" element={<POS />} />
             <Route path="/inventory" element={<Inventory />} />
-            {/* NEW ROUTES ADDED HERE */}
             <Route path="/customers" element={<Customers />} />
             <Route path="/settings" element={<Settings />} />
             
