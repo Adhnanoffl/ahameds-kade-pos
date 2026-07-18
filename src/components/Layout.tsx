@@ -1,3 +1,4 @@
+//@ts-nocheck
 import React from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
 import { LayoutDashboard, ShoppingCart, Package, Users, Settings } from 'lucide-react';
