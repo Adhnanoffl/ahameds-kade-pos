@@ -2,7 +2,10 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import toast from 'react-hot-toast';
-import { Users, Plus, Search, Edit, Trash2, X, User, Phone, Mail, Loader2 } from 'lucide-react';
+import { 
+  Users, Plus, Search, Edit, Trash2, X, 
+  User, Phone, Mail, Loader2, Award, Calendar 
+} from 'lucide-react';
 
 export default function Customers() {
   const [customers, setCustomers] = useState([]);
@@ -38,7 +41,6 @@ export default function Customers() {
   const openModal = (customer = null) => {
     if (customer) {
       setEditingId(customer.id);
-      // Look for full_name or name from the database
       setFormData({ 
         name: customer.full_name || customer.name || '', 
         phone: customer.phone || '', 
@@ -57,7 +59,6 @@ export default function Customers() {
     
     setIsSubmitting(true);
     
-    // CRITICAL FIX: Send data to BOTH name columns to satisfy your specific database schema
     const payload = {
       full_name: formData.name, 
       name: formData.name,      
@@ -69,11 +70,11 @@ export default function Customers() {
       if (editingId) {
         const { error } = await supabase.from('customers').update(payload).eq('id', editingId);
         if (error) throw error;
-        toast.success("Customer updated!");
+        toast.success("Customer profile updated!");
       } else {
         const { error } = await supabase.from('customers').insert([payload]);
         if (error) throw error;
-        toast.success("Customer added!");
+        toast.success("New loyalty member added!");
       }
       setIsModalOpen(false);
       fetchCustomers();
@@ -85,12 +86,12 @@ export default function Customers() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this customer?")) return;
+  const handleDelete = async (id: string, name: string) => {
+    if (!window.confirm(`Remove ${name} from the database? This action cannot be undone.`)) return;
     try {
       const { error } = await supabase.from('customers').delete().eq('id', id);
       if (error) throw error;
-      toast.success("Customer deleted");
+      toast.success("Customer removed");
       fetchCustomers();
     } catch (error: any) {
       toast.error("Failed to delete customer");
@@ -104,121 +105,162 @@ export default function Customers() {
   });
 
   return (
-    <div className="p-8 max-w-7xl mx-auto h-full flex flex-col">
-      <div className="flex justify-between items-center mb-8">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto h-full flex flex-col font-sans">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Customers</h1>
-          <p className="text-gray-500 mt-1">Manage your customer database</p>
+          <h1 className="text-3xl font-black text-slate-900 tracking-tight">Customer Loyalty</h1>
+          <p className="text-slate-500 mt-1 font-medium">Manage shopper profiles and contact information</p>
         </div>
         <button 
           onClick={() => openModal()}
-          className="bg-brand-600 hover:bg-brand-700 text-white px-4 py-2 rounded-xl font-medium flex items-center gap-2"
+          className="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-600/20 transition-all"
         >
-          <Plus size={20} /> Add Customer
+          <Plus size={20} /> Register Member
         </button>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 flex-1 flex flex-col overflow-hidden">
-        <div className="p-4 border-b border-gray-100 bg-gray-50/50">
-          <div className="relative max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex-1 flex flex-col overflow-hidden">
+        {/* Search Bar */}
+        <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+          <div className="relative w-full max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
             <input 
               type="text" 
-              placeholder="Search by name or phone..." 
+              placeholder="Search by name or phone number..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500"
+              className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 bg-white shadow-sm transition-all text-slate-800"
             />
+          </div>
+          <div className="hidden md:flex items-center gap-2 text-sm font-bold text-slate-500">
+            <Users size={18} className="text-indigo-500" />
+            Total Members: {customers.length}
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        {/* Enterprise Data Table */}
+        <div className="flex-1 overflow-y-auto bg-white">
           {loading ? (
-             <div className="flex flex-col items-center justify-center h-full text-gray-400">
-               <Loader2 className="animate-spin mb-2" size={32} />
-               <p>Loading customers...</p>
+             <div className="flex flex-col items-center justify-center h-64 text-slate-400">
+               <Loader2 className="animate-spin mb-3 text-indigo-600" size={32} />
+               <p className="font-medium">Loading customer database...</p>
              </div>
           ) : filteredCustomers.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400 p-8 text-center">
+            <div className="flex flex-col items-center justify-center h-64 text-slate-400 p-8 text-center">
               <Users size={64} className="mb-4 opacity-20" />
-              <h3 className="text-lg font-medium text-gray-900 mb-1">No customers found</h3>
-              <p className="text-sm">Click "Add Customer" to add someone to your database.</p>
+              <h3 className="text-lg font-bold text-slate-800 mb-1">No customers found</h3>
+              <p className="text-sm">Click "Register Member" to add a new shopper.</p>
             </div>
           ) : (
-            <div className="divide-y divide-gray-100">
-              {filteredCustomers.map(customer => {
-                const displayName = customer.full_name || customer.name || 'Unknown';
-                return (
-                  <div key={customer.id} className="p-4 hover:bg-gray-50 flex items-center justify-between transition-colors">
-                    <div className="flex items-center gap-4">
-                      <div className="bg-brand-100 text-brand-700 w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg">
-                        {displayName.charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                        <h4 className="font-bold text-gray-900">{displayName}</h4>
-                        <div className="flex items-center gap-3 text-sm text-gray-500 mt-1">
-                          {customer.phone && <span className="flex items-center gap-1"><Phone size={14} /> {customer.phone}</span>}
-                          {customer.email && <span className="flex items-center gap-1"><Mail size={14} /> {customer.email}</span>}
+            <table className="w-full text-left border-collapse">
+              <thead className="bg-slate-50 sticky top-0 border-b border-slate-200 shadow-sm z-10">
+                <tr>
+                  <th className="p-4 text-xs font-extrabold text-slate-500 uppercase tracking-wider">Member Profile</th>
+                  <th className="p-4 text-xs font-extrabold text-slate-500 uppercase tracking-wider">Contact Details</th>
+                  <th className="p-4 text-xs font-extrabold text-slate-500 uppercase tracking-wider">Member ID</th>
+                  <th className="p-4 text-xs font-extrabold text-slate-500 uppercase tracking-wider text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredCustomers.map(customer => {
+                  const displayName = customer.full_name || customer.name || 'Unknown';
+                  const initial = displayName.charAt(0).toUpperCase();
+                  // Create a fake member ID based on their DB UUID for visual professionalism
+                  const memberId = customer.id ? customer.id.split('-')[0].toUpperCase() : 'N/A';
+                  
+                  return (
+                    <tr key={customer.id} className="hover:bg-slate-50 transition-colors group">
+                      <td className="p-4">
+                        <div className="flex items-center gap-3">
+                          <div className="bg-indigo-100 text-indigo-700 w-10 h-10 rounded-full flex items-center justify-center font-bold shadow-inner">
+                            {initial}
+                          </div>
+                          <div>
+                            <div className="font-bold text-slate-900">{displayName}</div>
+                            <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                              <Calendar size={12}/> Registered {new Date(customer.created_at).toLocaleDateString()}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => openModal(customer)} className="p-2 text-gray-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg">
-                        <Edit size={18} />
-                      </button>
-                      <button onClick={() => handleDelete(customer.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                      </td>
+                      <td className="p-4">
+                        <div className="flex flex-col gap-1">
+                          {customer.phone ? (
+                            <span className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                              <Phone size={14} className="text-slate-400" /> {customer.phone}
+                            </span>
+                          ) : <span className="text-slate-300 text-sm italic">No phone</span>}
+                          {customer.email ? (
+                            <span className="flex items-center gap-2 text-sm text-slate-500">
+                              <Mail size={14} className="text-slate-400" /> {customer.email}
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200 font-mono">
+                          <Award size={14} className="text-amber-500" /> {memberId}
+                        </span>
+                      </td>
+                      <td className="p-4 flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => openModal(customer)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+                          <Edit size={18} />
+                        </button>
+                        <button onClick={() => handleDelete(customer.id, displayName)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors">
+                          <Trash2 size={18} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
         </div>
       </div>
 
+      {/* Advanced Modal Form */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-              <h3 className="font-bold text-lg">{editingId ? 'Edit Customer' : 'Add New Customer'}</h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600">
-                <X size={24} />
+        <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl transform transition-all">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h3 className="font-black text-xl text-slate-800">{editingId ? 'Update Member Profile' : 'Register New Member'}</h3>
+              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600 bg-white p-1 rounded-md shadow-sm border border-slate-200">
+                <X size={20} />
               </button>
             </div>
             
-            <form onSubmit={handleSave} className="p-6 space-y-4">
+            <form onSubmit={handleSave} className="p-6 space-y-5 bg-white">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Full Name *</label>
                 <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                  <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none" placeholder="John Doe" />
+                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none text-slate-800 font-medium transition-all" placeholder="Enter shopper's name" />
                 </div>
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Mobile Number</label>
                 <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                  <input type="tel" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none" placeholder="+1 234 567 8900" />
+                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input type="tel" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none text-slate-800 font-medium transition-all" placeholder="e.g. 077 123 4567" />
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Email Address</label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                  <input type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none" placeholder="john@example.com" />
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none text-slate-800 font-medium transition-all" placeholder="Optional for digital receipts" />
                 </div>
               </div>
 
               <div className="pt-4 flex gap-3">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 px-4 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium transition-colors">
+                <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 px-4 py-3.5 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl font-bold transition-colors">
                   Cancel
                 </button>
-                <button type="submit" disabled={isSubmitting} className="flex-1 px-4 py-2 text-white bg-brand-600 hover:bg-brand-700 rounded-xl font-medium transition-colors flex items-center justify-center">
-                  {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : 'Save Customer'}
+                <button type="submit" disabled={isSubmitting} className="flex-1 px-4 py-3.5 text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl font-bold transition-colors flex items-center justify-center shadow-lg shadow-indigo-600/20 disabled:opacity-50">
+                  {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : 'Save Profile'}
                 </button>
               </div>
             </form>
