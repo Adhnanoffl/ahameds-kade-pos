@@ -49,7 +49,7 @@ export default function Inventory() {
       setEditingId(product.id);
       setFormData({ 
         name: product.name || '', 
-        price: product.price?.toString() || '0', 
+        price: product.selling_price?.toString() || '0', 
         stock_quantity: product.stock_quantity?.toString() || '0',
         barcode: product.barcode || ''
       });
@@ -159,7 +159,7 @@ export default function Inventory() {
                 <tr>
                   <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Product Name</th>
                   <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Barcode</th>
-                  <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Price</th>
+                  <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Sell Price</th>
                   <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Stock</th>
                   <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">Actions</th>
                 </tr>
@@ -177,7 +177,7 @@ export default function Inventory() {
                         <span className="text-gray-300 italic">No barcode</span>
                       )}
                     </td>
-                    <td className="p-4 font-bold text-brand-600">${Number(product.price || 0).toFixed(2)}</td>
+                    <td className="p-4 font-bold text-brand-600">${Number(product.selling_price || 0).toFixed(2)}</td>
                     <td className="p-4">
                       <span className={`px-2 py-1 rounded-lg text-sm font-bold ${
                         (product.stock_quantity || 0) <= 5 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
