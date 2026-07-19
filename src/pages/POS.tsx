@@ -4,22 +4,32 @@ import { supabase } from '../lib/supabase';
 import toast from 'react-hot-toast';
 import {
   ShoppingCart, Plus, Minus, X, User, Receipt, Barcode, Trash2, Tag,
-  AlertCircle, PauseCircle, PlayCircle, Banknote, BookUser, Loader2, RefreshCw
+  AlertCircle, PauseCircle, PlayCircle, Banknote, Wallet, Loader2, RefreshCw,
+  Phone, Award, LayoutGrid, Scale, Check
 } from 'lucide-react';
+ 
+interface Category {
+  id: string;
+  name: string;
+  color: string;
+}
  
 interface Product {
   id: string;
+  category_id: string | null;
   name: string;
   barcode: string | null;
   selling_price: number;
   stock: number;
+  weight_based?: boolean;
 }
  
 interface Customer {
   id: string;
   full_name: string;
   phone: string | null;
-  loan_balance?: number; // Khata balance owed by this customer
+  loyalty_points?: number;
+  loan_balance?: number;
 }
  
 interface CartItem {
@@ -35,13 +45,16 @@ interface HeldSale {
   heldAt: string;
 }
  
+const NOTES = [20, 50, 100, 200, 500, 1000, 5000];
+ 
 const money = (n: number) =>
   `LKR ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
  
 export default function POS() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [taxRate, setTaxRate] = useState(0); // stored as a fraction internally, e.g. 0.15
+  const [taxRate, setTaxRate] = useState(0);
   const [receiptHeader, setReceiptHeader] = useState('');
   const [receiptFooter, setReceiptFooter] = useState('');
   const [cashierId, setCashierId] = useState<string | null>(null);
@@ -51,14 +64,20 @@ export default function POS() {
  
   const [cart, setCart] = useState<CartItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+ 
+  const [showGrid, setShowGrid] = useState(false);
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+ 
+  const [customerQuery, setCustomerQuery] = useState('');
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
  
   const [heldSales, setHeldSales] = useState<HeldSale[]>([]);
   const [showHeld, setShowHeld] = useState(false);
  
   const [showPayment, setShowPayment] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'khata'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'loan'>('cash');
   const [cashTendered, setCashTendered] = useState('');
+  const [cashNotes, setCashNotes] = useState<number[]>([]);
   const [processing, setProcessing] = useState(false);
  
   const scanInputRef = useRef<HTMLInputElement>(null);
@@ -75,12 +94,46 @@ export default function POS() {
     return () => window.removeEventListener('keydown', focusShortcut);
   }, []);
  
+  // Auto-add on an exact barcode match — no Enter required. A hardware
+  // scanner "typing" a code (or a cashier typing one out fully) triggers
+  // this the instant the string matches; Enter remains a fallback below
+  // for name searches.
+  useEffect(() => {
+    if (!searchQuery) return;
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return;
+    const match = products.find(p => p.barcode && p.barcode.toLowerCase() === q);
+    if (match) {
+      playBeep();
+      addToCart(match);
+      setSearchQuery('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, products]);
+ 
+  // Global Enter/Escape handling while the payment modal is open.
+  useEffect(() => {
+    if (!showPayment) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        confirmCharge();
+      } else if (e.key === 'Escape' && !processing) {
+        setShowPayment(false);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showPayment, cashTendered, paymentMethod, processing, cart, selectedCustomer]);
+ 
   const loadAll = async () => {
     setLoading(true);
     setLoadError(null);
     try {
-      const [productsRes, customersRes, settingsRes, userRes] = await Promise.all([
+      const [productsRes, categoriesRes, customersRes, settingsRes, userRes] = await Promise.all([
         supabase.from('products').select('*'),
+        supabase.from('categories').select('*'),
         supabase.from('customers').select('*'),
         supabase.from('store_settings').select('tax_rate, receipt_header, receipt_footer').eq('id', 'global_config').maybeSingle(),
         supabase.auth.getUser(),
@@ -90,6 +143,7 @@ export default function POS() {
       if (customersRes.error) throw customersRes.error;
  
       setProducts(productsRes.data || []);
+      setCategories(categoriesRes.data || []);
       setCustomers(customersRes.data || []);
       if (!settingsRes.error && settingsRes.data) {
         // store_settings.tax_rate is a whole percentage (15.0 = 15%) — convert to a fraction.
@@ -121,7 +175,7 @@ export default function POS() {
       osc.start();
       setTimeout(() => osc.stop(), 100);
     } catch (e) {
-      // Audio not supported — silent fail, not worth surfacing to the cashier
+      // Audio not supported — silent fail
     }
   };
  
@@ -146,7 +200,7 @@ export default function POS() {
     setCart(prev => {
       const existing = prev.find(item => item.product.id === product.id);
       if (existing) {
-        if (existing.quantity + 1 > product.stock) {
+        if (!product.weight_based && existing.quantity + 1 > product.stock) {
           toast.custom(() => (
             <div className="bg-[#FDF3E7] border border-[#E8C89A] text-[#8A4B0B] px-4 py-2 rounded-lg shadow-md flex items-center gap-2 text-sm font-medium">
               <AlertCircle size={18} /> Only {product.stock} left in stock
@@ -178,6 +232,10 @@ export default function POS() {
     scanInputRef.current?.focus();
   };
  
+  const setExactQuantity = (productId: string, qty: number) => {
+    setCart(prev => prev.map(item => (item.product.id === productId ? { ...item, quantity: qty } : item)));
+  };
+ 
   const removeFromCart = (productId: string) => {
     setCart(prev => prev.filter(item => item.product.id !== productId));
     scanInputRef.current?.focus();
@@ -189,8 +247,53 @@ export default function POS() {
   );
   const tax = subtotal * taxRate;
   const finalTotal = subtotal + tax;
- 
   const cashChange = paymentMethod === 'cash' ? Math.max(0, Number(cashTendered || 0) - finalTotal) : 0;
+ 
+  const noteBreakdown = useMemo(() => {
+    const counts: Record<number, number> = {};
+    cashNotes.forEach(n => { counts[n] = (counts[n] || 0) + 1; });
+    return Object.entries(counts)
+      .map(([denom, count]) => ({ denom: Number(denom), count }))
+      .sort((a, b) => b.denom - a.denom);
+  }, [cashNotes]);
+ 
+  const tapNote = (denom: number) => {
+    setCashNotes(prev => [...prev, denom]);
+    setCashTendered(prev => (Number(prev || 0) + denom).toFixed(2));
+  };
+ 
+  const clearNotes = () => {
+    setCashNotes([]);
+    setCashTendered('');
+  };
+ 
+  const setExactCash = () => {
+    setCashNotes([]);
+    setCashTendered(finalTotal.toFixed(2));
+  };
+ 
+  // ---- Customer lookup (phone-based) --------------------------------------
+ 
+  const customerMatches = useMemo(() => {
+    const q = customerQuery.trim();
+    if (q.length < 3) return [];
+    return customers.filter(c => c.phone && c.phone.includes(q));
+  }, [customerQuery, customers]);
+ 
+  const handleCustomerSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (customerMatches.length === 1) {
+      setSelectedCustomer(customerMatches[0]);
+      setCustomerQuery('');
+    } else if (customerMatches.length === 0) {
+      toast.error('No customer found with that phone number.');
+    }
+  };
+ 
+  const clearCustomer = () => {
+    setSelectedCustomer(null);
+    setCustomerQuery('');
+  };
  
   // ---- Hold / Resume -------------------------------------------------------
  
@@ -200,12 +303,12 @@ export default function POS() {
       id: crypto.randomUUID(),
       label: `${cart.length} item${cart.length > 1 ? 's' : ''} • ${money(subtotal)}`,
       cart,
-      customerId: selectedCustomerId,
+      customerId: selectedCustomer?.id || '',
       heldAt: new Date().toLocaleTimeString(),
     };
     setHeldSales(prev => [held, ...prev]);
     setCart([]);
-    setSelectedCustomerId('');
+    clearCustomer();
     toast.success('Sale held. Resume it any time before end of day.');
     scanInputRef.current?.focus();
   };
@@ -217,7 +320,7 @@ export default function POS() {
       return toast.error('Clear or hold the current sale before resuming another.');
     }
     setCart(held.cart);
-    setSelectedCustomerId(held.customerId);
+    setSelectedCustomer(customers.find(c => c.id === held.customerId) || null);
     setHeldSales(prev => prev.filter(h => h.id !== id));
     setShowHeld(false);
     scanInputRef.current?.focus();
@@ -233,12 +336,16 @@ export default function POS() {
     if (cart.length === 0) return toast.error('Cart is empty');
     setPaymentMethod('cash');
     setCashTendered(finalTotal.toFixed(2));
+    setCashNotes([]);
     setShowPayment(true);
   };
  
-  const printReceipt = (customer: Customer | undefined) => {
+  const printReceipt = () => {
     const receiptWindow = window.open('', '_blank', 'width=400,height=600');
     if (!receiptWindow) return;
+    const notesLine = paymentMethod === 'cash' && noteBreakdown.length > 0
+      ? `<p style="font-size: 10px; margin: 2px 0;">Notes given: ${noteBreakdown.map(n => `${n.count} x LKR ${n.denom}`).join(', ')}</p>`
+      : '';
     receiptWindow.document.write(`
       <html>
         <head>
@@ -260,15 +367,15 @@ export default function POS() {
           </div>
           <div class="divider"></div>
           <p style="font-size: 10px; margin: 2px 0;">Date: ${new Date().toLocaleString()}</p>
-          ${customer ? `<p style="font-size: 10px; margin: 2px 0;">Customer: ${customer.full_name}</p>` : ''}
-          <p style="font-size: 10px; margin: 2px 0;">Payment: ${paymentMethod === 'cash' ? 'Cash' : 'Khata (Credit)'}</p>
+          ${selectedCustomer ? `<p style="font-size: 10px; margin: 2px 0;">Customer: ${selectedCustomer.full_name}</p>` : ''}
+          <p style="font-size: 10px; margin: 2px 0;">Payment: ${paymentMethod === 'cash' ? 'Cash' : 'Loan'}</p>
           <div class="divider"></div>
           <div style="min-height: 50px;">
             ${cart.map(item => `
               <div class="item-row">
                 <div>${item.product.name}</div>
                 <div class="flex-between">
-                  <span>${item.quantity} x ${money(item.product.selling_price)}</span>
+                  <span>${item.product.weight_based ? item.quantity.toFixed(3) + ' kg' : item.quantity} x ${money(item.product.selling_price)}</span>
                   <span>${money(item.product.selling_price * item.quantity)}</span>
                 </div>
               </div>
@@ -283,6 +390,7 @@ export default function POS() {
           ${paymentMethod === 'cash' ? `
             <div class="flex-between" style="font-size: 12px;"><span>Tendered:</span><span>${money(Number(cashTendered || 0))}</span></div>
             <div class="flex-between" style="font-size: 12px;"><span>Change:</span><span>${money(cashChange)}</span></div>
+            ${notesLine}
           ` : ''}
           <div class="divider"></div>
           <div class="text-center" style="font-size: 10px; margin-top: 10px;">
@@ -299,8 +407,9 @@ export default function POS() {
   };
  
   const confirmCharge = async () => {
-    if (paymentMethod === 'khata' && !selectedCustomerId) {
-      return toast.error('Select a customer to charge this sale to their Khata account.');
+    if (cart.length === 0 || processing) return;
+    if (paymentMethod === 'loan' && !selectedCustomer) {
+      return toast.error('Look up a customer to charge this sale to their loan balance.');
     }
     if (paymentMethod === 'cash' && Number(cashTendered || 0) < finalTotal) {
       return toast.error('Amount tendered is less than the total due.');
@@ -311,7 +420,7 @@ export default function POS() {
       const { data: saleRow, error: saleError } = await supabase
         .from('sales')
         .insert({
-          customer_id: selectedCustomerId || null,
+          customer_id: selectedCustomer?.id || null,
           cashier_id: cashierId,
           subtotal,
           tax,
@@ -336,8 +445,7 @@ export default function POS() {
       if (itemsError) throw itemsError;
  
       // Decrement stock. NOTE: sequential client-side updates are fine for a single-terminal
-      // store, but if you ever run two registers at once, move this into a Postgres RPC
-      // (e.g. `decrement_stock(product_id, qty)`) so concurrent sales can't oversell the same item.
+      // store; move this into a Postgres RPC if you ever run concurrent registers.
       await Promise.all(
         cart.map(item =>
           supabase
@@ -347,22 +455,22 @@ export default function POS() {
         )
       );
  
-      if (paymentMethod === 'khata') {
-        const customer = customers.find(c => c.id === selectedCustomerId);
+      if (paymentMethod === 'loan' && selectedCustomer) {
         await supabase
           .from('customers')
-          .update({ loan_balance: (customer?.loan_balance || 0) + finalTotal })
-          .eq('id', selectedCustomerId);
+          .update({ loan_balance: (selectedCustomer.loan_balance || 0) + finalTotal })
+          .eq('id', selectedCustomer.id);
       }
  
-      printReceipt(customers.find(c => c.id === selectedCustomerId));
+      printReceipt();
       toast.success('Transaction complete');
  
       setCart([]);
-      setSelectedCustomerId('');
+      clearCustomer();
       setShowPayment(false);
       setCashTendered('');
-      loadAll(); // refresh stock levels and customer balances
+      setCashNotes([]);
+      loadAll();
     } catch (err: any) {
       console.error(err);
       toast.error(err.message || 'Checkout failed — cart has not been cleared.');
@@ -376,6 +484,13 @@ export default function POS() {
     const q = searchQuery.toLowerCase();
     return products.filter(p => p.name.toLowerCase().includes(q) || (p.barcode && p.barcode.includes(q)));
   }, [searchQuery, products]);
+ 
+  const gridProducts = useMemo(() => {
+    if (!activeCategory) return products;
+    return products.filter(p => p.category_id === activeCategory);
+  }, [products, activeCategory]);
+ 
+  const categoryColor = (id: string | null) => categories.find(c => c.id === id)?.color || '#A6A39A';
  
   if (loading) {
     return (
@@ -440,6 +555,14 @@ export default function POS() {
             </form>
  
             <button
+              onClick={() => setShowGrid(s => !s)}
+              title="Browse by category"
+              className={`shrink-0 p-3.5 rounded-xl border-2 transition-colors ${showGrid ? 'border-[#0F6E5B] bg-[#E4F3EF] text-[#0F6E5B]' : 'border-[#E7E3DB] text-[#6B6A66] hover:border-[#0F6E5B] hover:text-[#0F6E5B]'}`}
+            >
+              <LayoutGrid size={22} />
+            </button>
+ 
+            <button
               onClick={holdCurrentSale}
               title="Hold this sale"
               className="shrink-0 p-3.5 rounded-xl border-2 border-[#E7E3DB] text-[#6B6A66] hover:border-[#0F6E5B] hover:text-[#0F6E5B] transition-colors"
@@ -471,7 +594,9 @@ export default function POS() {
                   className="flex items-center justify-between p-4 hover:bg-[#E4F3EF] cursor-pointer border-b border-[#F1EFEA] transition-colors"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="bg-[#F1EFEA] p-2 rounded-lg text-[#6B6A66]"><Tag size={16} /></div>
+                    <div className="bg-[#F1EFEA] p-2 rounded-lg text-[#6B6A66]">
+                      {product.weight_based ? <Scale size={16} /> : <Tag size={16} />}
+                    </div>
                     <div>
                       <div className="font-bold text-[#1C1B19]">{product.name}</div>
                       <div className="text-xs text-[#6B6A66]">
@@ -480,7 +605,9 @@ export default function POS() {
                       </div>
                     </div>
                   </div>
-                  <div className="font-bold text-[#0F6E5B] font-['JetBrains_Mono']">{money(product.selling_price)}</div>
+                  <div className="font-bold text-[#0F6E5B] font-['JetBrains_Mono']">
+                    {money(product.selling_price)}{product.weight_based ? '/kg' : ''}
+                  </div>
                 </div>
               ))}
             </div>
@@ -516,6 +643,52 @@ export default function POS() {
           )}
         </div>
  
+        {/* Category Quick-Grid */}
+        {showGrid && (
+          <div className="bg-white border-b border-[#E7E3DB] p-4">
+            <div className="flex gap-2 overflow-x-auto pb-3">
+              <button
+                onClick={() => setActiveCategory(null)}
+                className={`shrink-0 px-4 py-2 rounded-full text-sm font-bold border-2 transition-colors ${!activeCategory ? 'bg-[#1C1B19] text-white border-[#1C1B19]' : 'border-[#E7E3DB] text-[#6B6A66]'}`}
+              >
+                All
+              </button>
+              {categories.map(cat => (
+                <button
+                  key={cat.id}
+                  onClick={() => setActiveCategory(cat.id)}
+                  className="shrink-0 px-4 py-2 rounded-full text-sm font-bold border-2 transition-colors"
+                  style={{
+                    borderColor: cat.color,
+                    backgroundColor: activeCategory === cat.id ? cat.color : 'transparent',
+                    color: activeCategory === cat.id ? '#fff' : cat.color,
+                  }}
+                >
+                  {cat.name}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2 max-h-64 overflow-y-auto">
+              {gridProducts.map(product => (
+                <button
+                  key={product.id}
+                  onClick={() => addToCart(product)}
+                  className="text-left p-3 rounded-xl border-2 border-[#E7E3DB] hover:border-[#0F6E5B] hover:bg-[#E4F3EF] transition-colors relative overflow-hidden"
+                >
+                  <div className="absolute top-0 left-0 w-full h-1" style={{ backgroundColor: categoryColor(product.category_id) }} />
+                  <div className="font-bold text-sm text-[#1C1B19] truncate mt-1 flex items-center gap-1">
+                    {product.weight_based && <Scale size={12} className="shrink-0 text-[#6B6A66]" />}
+                    {product.name}
+                  </div>
+                  <div className="text-xs font-bold text-[#0F6E5B] font-['JetBrains_Mono'] mt-1">
+                    {money(product.selling_price)}{product.weight_based ? '/kg' : ''}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+ 
         {/* Digital Receipt View */}
         <div className="flex-1 overflow-y-auto p-4">
           <div className="bg-white rounded-2xl shadow-sm border border-[#E7E3DB] overflow-hidden min-h-full flex flex-col">
@@ -537,19 +710,35 @@ export default function POS() {
                   <div key={item.product.id} className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-[#FAF9F6] transition-colors group">
                     <div className="col-span-6">
                       <div className="font-bold text-[#1C1B19] text-lg truncate">{item.product.name}</div>
-                      <div className="text-sm text-[#6B6A66] font-['JetBrains_Mono']">@ {money(item.product.selling_price)}</div>
+                      <div className="text-sm text-[#6B6A66] font-['JetBrains_Mono']">
+                        @ {money(item.product.selling_price)}{item.product.weight_based ? '/kg' : ''}
+                      </div>
                     </div>
  
                     <div className="col-span-3 flex justify-center">
-                      <div className="flex items-center gap-2 bg-white rounded-lg border border-[#E7E3DB] p-1">
-                        <button onClick={() => updateQuantity(item.product.id, -1)} className="p-1.5 hover:bg-[#FDECEC] hover:text-[#B91C1C] rounded text-[#6B6A66] transition-colors">
-                          <Minus size={16} />
-                        </button>
-                        <span className="font-bold text-lg w-8 text-center font-['JetBrains_Mono']">{item.quantity}</span>
-                        <button onClick={() => updateQuantity(item.product.id, 1)} className="p-1.5 hover:bg-[#E4F3EF] hover:text-[#0F6E5B] rounded text-[#6B6A66] transition-colors">
-                          <Plus size={16} />
-                        </button>
-                      </div>
+                      {item.product.weight_based ? (
+                        <div className="flex items-center gap-1 bg-white rounded-lg border border-[#E7E3DB] px-2 py-1">
+                          <input
+                            type="number"
+                            step="0.05"
+                            min="0.05"
+                            value={item.quantity}
+                            onChange={e => setExactQuantity(item.product.id, Math.max(0.05, parseFloat(e.target.value) || 0))}
+                            className="w-16 text-center font-bold font-['JetBrains_Mono'] outline-none"
+                          />
+                          <span className="text-xs text-[#6B6A66] font-bold">kg</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 bg-white rounded-lg border border-[#E7E3DB] p-1">
+                          <button onClick={() => updateQuantity(item.product.id, -1)} className="p-1.5 hover:bg-[#FDECEC] hover:text-[#B91C1C] rounded text-[#6B6A66] transition-colors">
+                            <Minus size={16} />
+                          </button>
+                          <span className="font-bold text-lg w-8 text-center font-['JetBrains_Mono']">{item.quantity}</span>
+                          <button onClick={() => updateQuantity(item.product.id, 1)} className="p-1.5 hover:bg-[#E4F3EF] hover:text-[#0F6E5B] rounded text-[#6B6A66] transition-colors">
+                            <Plus size={16} />
+                          </button>
+                        </div>
+                      )}
                     </div>
  
                     <div className="col-span-3 flex items-center justify-end gap-3">
@@ -572,22 +761,54 @@ export default function POS() {
       <div className="w-full md:w-[400px] bg-white border-l border-[#E7E3DB] flex flex-col h-full shadow-2xl z-10 relative">
  
         <div className="p-6 border-b border-[#F1EFEA] bg-[#FAF9F6]">
-          <label className="text-xs font-bold text-[#6B6A66] uppercase tracking-wider mb-2 block">Link customer (optional)</label>
-          <div className="relative">
-            <User className="absolute left-3 top-1/2 -translate-y-1/2 text-[#A6A39A]" size={18} />
-            <select
-              value={selectedCustomerId}
-              onChange={(e) => setSelectedCustomerId(e.target.value)}
-              className="w-full pl-10 pr-4 py-3.5 border border-[#E7E3DB] rounded-xl text-sm font-bold text-[#1C1B19] focus:border-[#0F6E5B] focus:ring-4 focus:ring-[#0F6E5B]/15 outline-none appearance-none bg-white transition-all"
-            >
-              <option value="">Walk-in customer</option>
-              {customers.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.full_name} {c.phone ? `(${c.phone})` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+          <label className="text-xs font-bold text-[#6B6A66] uppercase tracking-wider mb-2 block">Customer</label>
+ 
+          {selectedCustomer ? (
+            <div className="bg-white border-2 border-[#0F6E5B] rounded-xl p-3">
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="font-bold text-[#1C1B19]">{selectedCustomer.full_name}</div>
+                  <div className="text-xs text-[#6B6A66]">{selectedCustomer.phone}</div>
+                </div>
+                <button onClick={clearCustomer} className="text-[#A6A39A] hover:text-[#B91C1C]">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="flex gap-4 mt-2 pt-2 border-t border-[#F1EFEA] text-xs">
+                <div className="flex items-center gap-1 text-[#B45309] font-bold">
+                  <Award size={14} /> {selectedCustomer.loyalty_points || 0} pts
+                </div>
+                <div className={`flex items-center gap-1 font-bold ${(selectedCustomer.loan_balance || 0) > 0 ? 'text-[#B91C1C]' : 'text-[#6B6A66]'}`}>
+                  <Wallet size={14} /> {money(selectedCustomer.loan_balance || 0)} owed
+                </div>
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={handleCustomerSubmit} className="relative">
+              <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-[#A6A39A]" size={18} />
+              <input
+                type="tel"
+                value={customerQuery}
+                onChange={e => setCustomerQuery(e.target.value)}
+                placeholder="Phone number, then Enter"
+                className="w-full pl-10 pr-4 py-3 border border-[#E7E3DB] rounded-xl text-sm font-bold text-[#1C1B19] focus:border-[#0F6E5B] focus:ring-4 focus:ring-[#0F6E5B]/15 outline-none bg-white"
+              />
+              {customerMatches.length > 1 && (
+                <div className="absolute left-0 right-0 mt-1 bg-white border border-[#E7E3DB] rounded-xl shadow-xl z-30 max-h-48 overflow-y-auto">
+                  {customerMatches.map(c => (
+                    <div
+                      key={c.id}
+                      onClick={() => { setSelectedCustomer(c); setCustomerQuery(''); }}
+                      className="p-3 hover:bg-[#E4F3EF] cursor-pointer border-b border-[#F1EFEA] text-sm"
+                    >
+                      <div className="font-bold">{c.full_name}</div>
+                      <div className="text-xs text-[#6B6A66]">{c.phone}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </form>
+          )}
         </div>
  
         <div className="p-6 grid grid-cols-2 gap-3 border-b border-[#F1EFEA]">
@@ -630,7 +851,7 @@ export default function POS() {
       {/* PAYMENT MODAL */}
       {showPayment && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => !processing && setShowPayment(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="p-6 border-b border-[#F1EFEA]">
               <h3 className="font-bold text-xl font-['Space_Grotesk']">Take payment</h3>
               <p className="text-3xl font-bold text-[#0F6E5B] font-['JetBrains_Mono'] mt-1">{money(finalTotal)}</p>
@@ -645,32 +866,64 @@ export default function POS() {
                   <Banknote size={22} /> Cash
                 </button>
                 <button
-                  onClick={() => setPaymentMethod('khata')}
-                  className={`flex flex-col items-center gap-2 py-4 rounded-xl border-2 font-bold text-sm transition-colors ${paymentMethod === 'khata' ? 'border-[#B45309] bg-[#FDF3E7] text-[#B45309]' : 'border-[#E7E3DB] text-[#6B6A66]'}`}
+                  onClick={() => setPaymentMethod('loan')}
+                  className={`flex flex-col items-center gap-2 py-4 rounded-xl border-2 font-bold text-sm transition-colors ${paymentMethod === 'loan' ? 'border-[#B45309] bg-[#FDF3E7] text-[#B45309]' : 'border-[#E7E3DB] text-[#6B6A66]'}`}
                 >
-                  <BookUser size={22} /> Khata (credit)
+                  <Wallet size={22} /> Loan
                 </button>
               </div>
  
               {paymentMethod === 'cash' ? (
                 <div>
-                  <label className="text-xs font-bold text-[#6B6A66] uppercase tracking-wider mb-2 block">Amount tendered</label>
-                  <input
-                    type="number"
-                    value={cashTendered}
-                    onChange={e => setCashTendered(e.target.value)}
-                    className="w-full px-4 py-3 border-2 border-[#E7E3DB] rounded-xl text-lg font-bold font-['JetBrains_Mono'] focus:border-[#0F6E5B] outline-none"
-                  />
+                  <div className="grid grid-cols-4 gap-2">
+                    {NOTES.map(n => (
+                      <button
+                        key={n}
+                        onClick={() => tapNote(n)}
+                        className="py-3 rounded-xl border-2 border-[#0F6E5B]/30 bg-[#E4F3EF] text-[#0F6E5B] font-bold text-sm hover:border-[#0F6E5B] transition-colors font-['JetBrains_Mono']"
+                      >
+                        {n}
+                      </button>
+                    ))}
+                    <button onClick={setExactCash} className="py-3 rounded-xl border-2 border-[#E7E3DB] text-[#6B6A66] font-bold text-xs hover:border-[#0F6E5B]">
+                      Exact
+                    </button>
+                    <button onClick={clearNotes} className="py-3 rounded-xl border-2 border-[#E7E3DB] text-[#6B6A66] font-bold text-xs hover:border-[#B91C1C]">
+                      Clear
+                    </button>
+                  </div>
+ 
+                  {noteBreakdown.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-3">
+                      {noteBreakdown.map(n => (
+                        <span key={n.denom} className="text-xs font-bold bg-[#F1EFEA] text-[#6B6A66] px-2 py-1 rounded-full font-['JetBrains_Mono']">
+                          {n.count} x {n.denom}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+ 
+                  <div className="mt-4">
+                    <label className="text-xs font-bold text-[#6B6A66] uppercase tracking-wider mb-1 block">Amount tendered</label>
+                    <input
+                      type="number"
+                      value={cashTendered}
+                      onChange={e => { setCashTendered(e.target.value); setCashNotes([]); }}
+                      className="w-full px-4 py-3 border-2 border-[#E7E3DB] rounded-xl text-lg font-bold font-['JetBrains_Mono'] focus:border-[#0F6E5B] outline-none"
+                    />
+                  </div>
+ 
                   <div className="flex justify-between mt-3 text-sm font-medium">
                     <span className="text-[#6B6A66]">Change due</span>
-                    <span className="font-bold font-['JetBrains_Mono'] text-[#1C1B19]">{money(cashChange)}</span>
+                    <span className="font-bold font-['JetBrains_Mono'] text-lg text-[#1C1B19]">{money(cashChange)}</span>
                   </div>
+                  <p className="text-xs text-[#A6A39A] mt-2">Press Enter to confirm and print.</p>
                 </div>
               ) : (
                 <div className="text-sm text-[#8A4B0B] bg-[#FDF3E7] border border-[#E8C89A] rounded-xl p-3">
-                  {selectedCustomerId
-                    ? `${money(finalTotal)} will be added to ${customers.find(c => c.id === selectedCustomerId)?.full_name}'s Khata balance.`
-                    : 'Select a customer on the right before charging to Khata.'}
+                  {selectedCustomer
+                    ? `${money(finalTotal)} will be added to ${selectedCustomer.full_name}'s loan balance.`
+                    : 'Look up a customer on the right before charging to their loan.'}
                 </div>
               )}
             </div>
@@ -688,7 +941,7 @@ export default function POS() {
                 disabled={processing}
                 className="flex-[2] py-3 rounded-xl font-bold text-sm text-white bg-[#0F6E5B] hover:bg-[#0B4F41] disabled:opacity-60 flex items-center justify-center gap-2"
               >
-                {processing ? <Loader2 className="animate-spin" size={18} /> : <Receipt size={18} />}
+                {processing ? <Loader2 className="animate-spin" size={18} /> : <Check size={18} />}
                 {processing ? 'Processing…' : 'Confirm & print'}
               </button>
             </div>
